@@ -1,76 +1,89 @@
 import express from "express"
-import expressValidator from "express-validator"
-import compression from "compression"
-import bodyParser from "body-parser"
+import * as http2 from 'http2'
+import fastify, { FastifyRequest, FastifyReply } from "fastify"
 import lusca from "lusca"
 import cors from "cors"
 import config from "./config"
-import Routes from "./global/routes/v1"
+import Routes from "./global/route/v1"
 import errorMiddleware from "./global/middleware/error.middleware"
+import fs from 'fs'
+import path from 'path'
 
-class App {
-
-    public app: express.Application
-    public routes: any
-
-    constructor ()
-    {
-        this.app = express()
-        this.routes = new Routes().route
-
-        this.initializeMiddlewares()
-        this.initializeErrorHandling()
-        this.initializeRoutes()
+const app: express.Application = express()
+let routes: any = new Routes().route;
+const fastifyApp = fastify({
+    logger: true,
+    http2: true,
+    https: {
+        allowHTTP1: true,   // fallback support for HTTP1
+        key: fs.readFileSync(path.join(__dirname, '..', 'ssl_certificate', 'localhost-privkey.pem')),
+        cert: fs.readFileSync(path.join(__dirname, '..', 'ssl_certificate', 'localhost-cert.pem'))
     }
+})
 
+ /**
+ * Security headers
+ * 
+ * Use fastify helmet
+ */
+
+// Declare a route
+fastifyApp.get('/health', (request: FastifyRequest<http2.Http2ServerRequest>, response: FastifyReply<http2.Http2ServerResponse>) => {
+    response.code(200).send(config)
+})
+
+// Run the server!
+fastifyApp.listen(3030, function (err, address) {
+    if (err) {
+        fastifyApp.log.error(err)
+        process.exit(1)
+    }
+    fastifyApp.log.info(`server listening on ${address}`)
+})
+
+/**
+ * Express configuration
+ */
+function initializeMiddlewares() {
     /**
-     * Express configuration
+     * Security headers
+     * 
      */
-    private initializeMiddlewares()
-    {
-        this.app.use(compression())
-        // * express body parser
-        this.app.use(bodyParser.json())
-        this.app.use(bodyParser.urlencoded({ extended: true }))
-        this.app.use(expressValidator())
-
-       /**
-         * Security headers
-         * 
-         */
-        this.app.use(lusca.xframe("SAMEORIGIN"))
-        this.app.use(lusca.xssProtection(true))
-        this.app.use(lusca.nosniff())
-        this.app.use(lusca.csp({
-            policy: {
-                'default-src': config.csp_src ? `'self' ${config.csp_src}` : '*',
-                'img-src': "*",
-                'style-src': '*'
-            }
-        }))
-        this.app.use(lusca.referrerPolicy('same-origin'))
-        this.app.use(lusca.hsts({
-            maxAge: 31536000,
-            includeSubDomains: true
-        }))
-        this.app.disable('x-powered-by')
-        this.app.use(cors({
-            origin: config.cors_origin
-        }))
-    }
-
-    private initializeErrorHandling()
-    {
-        this.app.use(errorMiddleware)
-    }
-
-    /**
-     * Routes
-     */
-    private initializeRoutes()
-    {
-        this.app.use("/api/v1", this.routes)
-    }
+    app.use(lusca.xframe("SAMEORIGIN"))
+    app.use(lusca.xssProtection(true))
+    app.use(lusca.nosniff())
+    app.use(lusca.csp({
+        policy: {
+            'default-src': config.csp_src ? `'self' ${config.csp_src}` : '*',
+            'img-src': "*",
+            'style-src': '*'
+        }
+    }))
+    app.use(lusca.referrerPolicy('same-origin'))
+    app.use(lusca.hsts({
+        maxAge: 31536000,
+        includeSubDomains: true
+    }))
+    app.disable('x-powered-by')
+    app.use(cors({
+        origin: config.cors_origin
+    }))
 }
 
-export default App
+function initializeErrorHandling() {
+    app.use(errorMiddleware)
+}
+
+/**
+ * Routes
+ */
+function initializeRoutes() {
+    app.get('/health', (request: express.Request, response: express.Response) => response.status(200).json(config))
+    app.use("/api/v1", routes)
+}
+
+initializeMiddlewares()
+initializeErrorHandling()
+initializeRoutes()
+
+export default app
